@@ -157,9 +157,10 @@ const boxes = [];
 let selected = null;
 let mode = 'select';
 let curveGroup = null;
+let curveInfo = null;
 
 // ============================================================
-// TransformControls（簡化版，不加 objectChange）
+// TransformControls
 // ============================================================
 const tc = new TransformControls(camera, renderer.domElement);
 tc.setMode('translate');
@@ -195,18 +196,14 @@ function makeBox(pos, size = 1, hue = null) {
   return entry;
 }
 
-// 依縮放動態算「有效半徑」，取代原 objectChange 監聽
-function getEffectiveRadius(entry) {
-  const s = entry.mesh.scale;
-  const maxScale = Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z));
-  const eff = entry.size * maxScale;
-  return Math.sqrt(3) * eff / 2;
-}
-
 function getEffectiveSize(entry) {
   const s = entry.mesh.scale;
   const maxScale = Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z));
   return entry.size * maxScale;
+}
+
+function getEffectiveRadius(entry) {
+  return Math.sqrt(3) * getEffectiveSize(entry) / 2;
 }
 
 function removeEntry(entry) {
@@ -289,7 +286,7 @@ function nearestBox(p) {
 }
 
 // ============================================================
-// 追加隨機方塊（分散、大間距）
+// 追加隨機方塊
 // ============================================================
 let randCounter = 0;
 
@@ -297,16 +294,18 @@ function addRandomBoxes(seed) {
   const rng = mulberry32(seed);
   const n = 3 + Math.floor(rng() * 4);
   for (let i = 0; i < n; i++) {
-    const size = 0.8 + rng() * 1.8;           // 0.8 – 2.6
+    const size = 0.8 + rng() * 1.8;
     const angle = rng() * Math.PI * 2;
-    const radius = 2.0 + rng() * 5.0;         // 2.0 – 7.0（更緊湊）
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
-    const y = size / 2 + rng() * 2.0;         // 0.4 – 2.8
-    makeBox(new THREE.Vector3(x, y, z), size);
+    const radius = 2.0 + rng() * 5.0;
+    makeBox(
+      new THREE.Vector3(
+        Math.cos(angle) * radius,
+        size / 2 + rng() * 2.0,
+        Math.sin(angle) * radius
+      ),
+      size
+    );
   }
-  console.log('[addRandomBoxes] seed=' + seed + ' added=' + n +
-              ' total=' + boxes.length);
 }
 
 // ============================================================
@@ -434,8 +433,10 @@ function generateCurve(seed, gap, shellThick) {
     visited.push(p.clone());
   }
 
-  generateCurve._lastInfo = { maxBoxSize, targetGap, maxGap, effShell };
-  return visited;
+  return {
+    points: visited,
+    info: { maxBoxSize, targetGap, maxGap, effShell }
+  };
 }
 
 // ============================================================
@@ -450,11 +451,11 @@ function clearCurve() {
     });
     curveGroup = null;
   }
-  generateCurve._lastInfo = null;
+  curveInfo = null;
   updateStatus();
 }
 
-function drawCurve(pts) {
+function drawCurve(pts, info) {
   clearCurve();
   curveGroup = new THREE.Group();
 
@@ -474,6 +475,7 @@ function drawCurve(pts) {
   curveGroup.add(startMesh);
 
   scene.add(curveGroup);
+  curveInfo = info;
   updateStatus();
 }
 
@@ -486,10 +488,9 @@ function updateStatus() {
     const line = curveGroup.children.find(c => c.type === 'Line');
     n = line ? line.geometry.attributes.position.count : 0;
   }
-  const info = generateCurve._lastInfo;
   let extra = '';
-  if (info && n > 0) {
-    extra = ` | 距表面 ${info.targetGap.toFixed(2)}–${info.maxGap.toFixed(2)}`;
+  if (curveInfo && n > 0) {
+    extra = ` | 距表面 ${curveInfo.targetGap.toFixed(2)}–${curveInfo.maxGap.toFixed(2)}`;
   }
   document.getElementById('status').textContent =
     `方塊: ${boxes.length} | 曲線: ${n ? n + ' 點' : '無'}${extra}` +
@@ -611,13 +612,14 @@ document.getElementById('btnCurve').addEventListener('click', () => {
 
   setTimeout(() => {
     try {
-      const pts = generateCurve(seed, gap, shell);
+      const result = generateCurve(seed, gap, shell);
+      const pts = result.points;
       if (pts.length < 4) throw new Error('生成點太少，請加大「殼厚」');
-      drawCurve(pts);
-      const info = generateCurve._lastInfo;
+      drawCurve(pts, result.info);
       console.log(`[curve] seed=${seed} gap=${gap} shell=${shell} ` +
                   `points=${pts.length} ` +
-                  `range=[${info.targetGap.toFixed(2)}, ${info.maxGap.toFixed(2)}]`);
+                  `maxBoxSize=${result.info.maxBoxSize.toFixed(2)} ` +
+                  `range=[${result.info.targetGap.toFixed(2)}, ${result.info.maxGap.toFixed(2)}]`);
     } catch (err) {
       console.error(err);
       alert('生成失敗：' + err.message);
@@ -661,15 +663,9 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 初始場景 + 調試
+// 初始場景
 // ============================================================
-console.log('[init] Three.js version:', THREE.REVISION);
 addRandomBoxes(42);
-console.log('[init] boxes created:', boxes.length);
-boxes.forEach((b, i) => {
-  console.log(`[init] box ${i}:`, b.mesh.position.toArray(),
-              'size =', b.size.toFixed(2));
-});
 </script>
 
 </body>
