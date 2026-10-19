@@ -7,6 +7,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0a0a12;color:#eee;font:13px system-ui,sans-serif;overflow:hidden}
+body.add-mode canvas{cursor:crosshair}
 #ui{position:fixed;top:10px;left:10px;background:#141622e6;padding:10px;border-radius:10px;display:flex;flex-direction:column;gap:6px;min-width:280px;backdrop-filter:blur(8px);user-select:none}
 .r{display:flex;gap:6px;align-items:center}
 button{background:#2a2e42;color:#eef;border:1px solid #3a3e52;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:13px}
@@ -20,6 +21,8 @@ input[type=range]{flex:1;accent-color:#ffb060}
 label{font-size:12px;color:#aab;white-space:nowrap}
 .v{font-size:12px;color:#9aa;width:38px;text-align:right}
 #s{font-size:12px;color:#9aa;padding-top:4px;border-top:1px solid #2a2e42;line-height:1.5}
+#modeBar{font-size:11px;color:#ffc860;display:none}
+body.add-mode #modeBar{display:block}
 </style>
 </head>
 <body>
@@ -30,7 +33,8 @@ label{font-size:12px;color:#aab;white-space:nowrap}
 <div class="r"><label>種子</label><input id="sd" type="number" value="42"></div>
 <div class="r"><label>離表面</label><input id="gp" type="range" min=".01" max=".5" step=".01" value=".15"><span id="gv" class="v">.15</span></div>
 <div class="r"><label>殼厚</label><input id="sh" type="range" min=".2" max="1.5" step=".1" value=".7"><span id="sv" class="v">.7</span></div>
-<div class="r"><label>平滑度</label><input id="mt" type="range" min=".08" max=".45" step=".01" value=".22" title="數值越小越平滑、越大越靈活"><span id="mv" class="v">.22</span></div>
+<div class="r"><label>平滑度</label><input id="mt" type="range" min=".08" max=".45" step=".01" value=".22"><span id="mv" class="v">.22</span></div>
+<div id="modeBar">▶ 添加模式中：點擊地面連續放置方塊，按 Esc 或再點按鈕結束</div>
 <div id="s">方塊: 0 | 曲線: 無</div>
 </div>
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
@@ -43,13 +47,11 @@ const rn=new T.WebGLRenderer({antialias:true});rn.setPixelRatio(Math.min(deviceP
 const oc=new O(cm,rn.domElement);oc.enableDamping=true;oc.dampingFactor=.08;oc.target.set(0,1,0);
 sc.add(new T.AmbientLight(0xffffff,.65));const kl=new T.DirectionalLight(0xffffff,1.4);kl.position.set(6,12,6);sc.add(kl);const fl=new T.DirectionalLight(0x88aaff,.5);fl.position.set(-6,6,-6);sc.add(fl);
 sc.add(new T.GridHelper(60,60,0x333348,0x1a1a28));
-const gp=new T.Mesh(new T.PlaneGeometry(60,60),new T.MeshBasicMaterial({visible:false,side:T.DoubleSide}));gp.rotation.x=-Math.PI/2;sc.add(gp);
 
 const bs=[];let sel=null,mode='sel',cg=null,ci=null;
-let wdg=false;
 
 const tc=new X(cm,rn.domElement);tc.setMode('translate');tc.setSpace('world');tc.setSize(.9);
-tc.addEventListener('dragging-changed',e=>{oc.enabled=!e.value;if(e.value)wdg=true;});
+tc.addEventListener('dragging-changed',e=>{oc.enabled=!e.value;});
 let th;try{th=typeof tc.getHelper==='function'?tc.getHelper():tc;sc.add(th);}catch(e){th=null}
 
 function mk(p,sz=1,h=null){const c=new T.Color().setHSL(typeof h==='number'?h:Math.random(),.6,.6);
@@ -71,7 +73,7 @@ const ax=Math.abs(n.x)<.9?new T.Vector3(1,0,0):new T.Vector3(0,1,0);const t=ax.c
 function nb(p){if(!bs.length)return null;let d=Infinity,b=null;for(const x of bs){const dd=p.distanceTo(x.mesh.position)-er(x);if(dd<d){d=dd;b=x;}}return b?{box:b,dist:d}:null;}
 
 let rc=0;
-function ar(s){const r=m32(s);const n=3+Math.floor(r()*4);for(let i=0;i<n;i++){const sz=.8+r()*1.8,an=r()*Math.PI*2,ra=2+r()*5;mk(new T.Vector3(Math.cos(an)*ra,sz/2+r()*2,Math.sin(an)*ra),sz);}}
+function ar(s){const r=m32(s);const n=2+Math.floor(r()*3);for(let i=0;i<n;i++){const sz=.8+r()*1.8,an=r()*Math.PI*2,ra=2+r()*5;mk(new T.Vector3(Math.cos(an)*ra,sz/2+r()*2,Math.sin(an)*ra),sz);}}
 
 function gc(seed,gap,shl,mt){const r=m32(seed);
 let mx=0;for(const b of bs)mx=Math.max(mx,es(b));if(mx<=0)mx=1;const hf=.5*mx;
@@ -79,11 +81,9 @@ const tg=Math.min(gap,hf*.9);const esh=Math.min(shl,Math.max(.05,hf-tg));const m
 const ro=Math.min(Math.max(.01,mx*.02),Math.max(.008,tg*.5));
 const st=Math.max(.03,mx*.02);
 const ep=st*1.8;
-
 const bbox=new T.Box3();for(const b of bs)bbox.expandByPoint(b.mesh.position);
 const diag=bbox.getSize(new T.Vector3()).length();
 const N=Math.min(6000,Math.ceil(diag*8/st)+bs.length*120);
-
 const ct=new T.Vector3();for(const b of bs)ct.add(b.mesh.position);ct.divideScalar(bs.length);
 let p=null;for(let i=0;i<300;i++){const b=bs[Math.floor(r()*bs.length)];if(!b)break;const d0=ru(r);const ds2=er(b)+tg+r()*(mg-tg)*.7;const cd=b.mesh.position.clone().addScaledVector(d0,ds2);const n0=nb(cd);if(n0&&n0.dist>=ro){p=cd;break;}}
 if(!p){const b=bs[0];p=b.mesh.position.clone().addScaledVector(ru(r),er(b)+mg);}
@@ -92,40 +92,21 @@ const sk=Math.ceil(ep/st)+1;
 const visited=new Set();
 
 for(let i=0;i<N;i++){
-for(let k=0;k<bs.length;k++){
-  if(visited.has(k))continue;
-  const dk=p.distanceTo(bs[k].mesh.position);
-  if(dk<er(bs[k])+mg*1.2)visited.add(k);
-}
-
+for(let k=0;k<bs.length;k++){if(visited.has(k))continue;const dk=p.distanceTo(bs[k].mesh.position);if(dk<er(bs[k])+mg*1.2)visited.add(k);}
 const rd=p.clone().sub(ct).normalize();const n1=nb(p);if(!n1)break;
 let ow=p.clone().sub(n1.box.mesh.position);if(ow.lengthSq()<1e-8)ow=ru(r);else ow.normalize();
 const rf=new T.Vector3();
 if(n1.dist<tg)rf.copy(ow).multiplyScalar(3);
 else if(n1.dist>mg&&n1.dist<mg*3)rf.copy(ow).multiplyScalar(-2.5);
 else if(n1.dist>=tg&&n1.dist<=mg){const sp=Math.max(1e-6,mg-tg);const t2=(n1.dist-tg)/sp;rf.copy(ow).multiplyScalar(-.4+.8*t2);}
-
 let ta=dir.clone().addScaledVector(rd,-dir.dot(rd));if(ta.lengthSq()<1e-8)ta=rt(rd,r);else ta.normalize();
-
 const rp=new T.Vector3();const rr=3*st+ep;const lo=Math.max(0,vs.length-sk-40),hi=vs.length-sk;
 for(let j=lo;j<hi;j++){const dq=p.clone().sub(vs[j]);const dd=dq.length();if(dd>1e-6&&dd<rr)rp.addScaledVector(dq,1/(dd*dd*dd));}
 if(rp.lengthSq()>1e-8)rp.normalize();
-
 let attVec=new T.Vector3(),attW=0;
-if(visited.size<bs.length){
-  let bD=Infinity,bI=-1;
-  for(let k=0;k<bs.length;k++){
-    if(visited.has(k))continue;
-    const dk=p.distanceTo(bs[k].mesh.position);
-    if(dk<bD){bD=dk;bI=k;}
-  }
-  if(bI>=0){
-    attVec.copy(bs[bI].mesh.position).sub(p).normalize();
-    const scale=er(bs[bI])+mg;
-    attW=Math.min(1.8,Math.max(0,(bD-scale*2)/(scale*3)));
-  }
-}
-
+if(visited.size<bs.length){let bD=Infinity,bI=-1;
+for(let k=0;k<bs.length;k++){if(visited.has(k))continue;const dk=p.distanceTo(bs[k].mesh.position);if(dk<bD){bD=dk;bI=k;}}
+if(bI>=0){attVec.copy(bs[bI].mesh.position).sub(p).normalize();const scale=er(bs[bI])+mg;attW=Math.min(1.8,Math.max(0,(bD-scale*2)/(scale*3)));}}
 const nd=new T.Vector3()
   .addScaledVector(ta,1.5*(1-attW*.45))
   .addScaledVector(rf,1.2)
@@ -133,20 +114,11 @@ const nd=new T.Vector3()
   .addScaledVector(dir,2.0)
   .addScaledVector(attVec,attW*1.4)
   .addScaledVector(ru(r),.15);
-
 if(nd.lengthSq()<1e-8)nd.copy(ru(r));
-else{
-  nd.normalize();
+else{nd.normalize();
   const dt=Math.max(-1,Math.min(1,dir.dot(nd)));
   const an2=Math.acos(dt);
-  if(an2>mt){
-    const ax=new T.Vector3().crossVectors(dir,nd);
-    if(ax.lengthSq()<1e-8)ax.set(0,1,0);
-    ax.normalize();
-    nd.copy(dir).applyAxisAngle(ax,mt);
-  }
-}
-
+  if(an2>mt){const ax=new T.Vector3().crossVectors(dir,nd);if(ax.lengthSq()<1e-8)ax.set(0,1,0);ax.normalize();nd.copy(dir).applyAxisAngle(ax,mt);}}
 let ok=false,cd=null;
 for(let t2=0;t2<30;t2++){
   cd=p.clone().addScaledVector(nd,st);const n2=nb(cd);if(!n2)break;
@@ -173,30 +145,50 @@ function us(){let n=0;if(cg){const l=cg.children.find(c=>c.type==='Line');if(l&&
 let ex='';if(ci&&n>0)ex=` | 距 ${ci.targetGap.toFixed(2)}–${ci.maxGap.toFixed(2)} | 覆蓋 ${ci.visited}/${ci.total}`;
 const el=document.getElementById('s');if(el)el.textContent=`方塊: ${bs.length} | 曲線: ${n?n+' 點':'無'}${ex}${sel?' | 已選中':''}`;}
 
+// ============ 拾取與地面 ============
 const ray=new T.Raycaster(),mo=new T.Vector2();
-function sm(e){mo.x=(e.clientX/innerWidth)*2-1;mo.y=-(e.clientY/innerHeight)*2+1;ray.setFromCamera(mo,cm);}
-function pg(e){sm(e);const h=ray.intersectObject(gp,false);return h.length?h[0].point:null;}
+const groundMathPlane=new T.Plane(new T.Vector3(0,1,0),0);
 
-let dx=0,dy=0;
-rn.domElement.addEventListener('pointerdown',e=>{if(e.button!==0)return;dx=e.clientX;dy=e.clientY;});
+function sm(e){mo.x=(e.clientX/innerWidth)*2-1;mo.y=-(e.clientY/innerHeight)*2+1;ray.setFromCamera(mo,cm);}
+function pg(e){sm(e);const pt=new T.Vector3();const hit=ray.ray.intersectPlane(groundMathPlane,pt);return hit?pt:null;}
+
+// pointerdown 狀態快照，不用全域 wdg
+let pdi=null;
+
+rn.domElement.addEventListener('pointerdown',e=>{
+  if(e.button!==0)return;
+  pdi={x:e.clientX,y:e.clientY,onGizmo:false};
+  if(sel&&th){
+    sm(e);
+    const gm=[];th.traverse(o=>{if(o.isMesh)gm.push(o);});
+    pdi.onGizmo=ray.intersectObjects(gm,false).length>0;
+  }
+});
+
 rn.domElement.addEventListener('pointerup',e=>{
   if(e.button!==0)return;
-  if(wdg){wdg=false;return;}
-  const moved=Math.hypot(e.clientX-dx,e.clientY-dy);
-  if(moved>5)return;
+  if(!pdi)return;
+  const info=pdi;pdi=null;
+  const moved=Math.hypot(e.clientX-info.x,e.clientY-info.y);
+  if(info.onGizmo||moved>5)return;
 
-  if(mode==='add'){const h=pg(e);if(h)mk(new T.Vector3(h.x,.5,h.z),1);return;}
+  // add 模式：連續添加
+  if(mode==='add'){
+    const h=pg(e);
+    if(h)mk(new T.Vector3(h.x,.5,h.z),1);
+    return;
+  }
 
+  // select 模式：全場景 raycast
   sm(e);
   const all=[];for(const b of bs)all.push(b.mesh);
-  if(th)th.traverse(o=>{if(o.isMesh)all.push(o);});
   const hits=ray.intersectObjects(all,false);
   if(hits.length===0){ds();return;}
-  const first=hits[0].object;
-  const entry=bs.find(b=>b.mesh===first);
+  const entry=bs.find(b=>b.mesh===hits[0].object);
   if(entry)se(entry);
 });
 
+// ============ UI ============
 const ge=document.getElementById('gp'),gv=document.getElementById('gv'),she=document.getElementById('sh'),sv=document.getElementById('sv'),sde=document.getElementById('sd'),bA=document.getElementById('bA');
 const mte=document.getElementById('mt'),mve=document.getElementById('mv');
 
@@ -204,7 +196,24 @@ ge.addEventListener('input',()=>gv.textContent=(+ge.value).toFixed(2));
 she.addEventListener('input',()=>sv.textContent=(+she.value).toFixed(1));
 mte.addEventListener('input',()=>mve.textContent=(+mte.value).toFixed(2));
 
-bA.addEventListener('click',()=>{if(mode==='add'){mode='sel';bA.classList.remove('a');}else{mode='add';bA.classList.add('a');ds();}});
+function updateModeUI(){
+  if(mode==='add'){
+    bA.textContent='✕ 結束添加';
+    bA.classList.add('a');
+    document.body.classList.add('add-mode');
+  }else{
+    bA.textContent='➕ 添加';
+    bA.classList.remove('a');
+    document.body.classList.remove('add-mode');
+  }
+}
+
+bA.addEventListener('click',()=>{
+  if(mode==='add'){mode='sel';ds();}
+  else{mode='add';ds();}
+  updateModeUI();
+});
+
 document.getElementById('bR').addEventListener('click',()=>{const s=((parseInt(sde.value,10)||42)*2654435761+(++rc))>>>0;ar(s);});
 document.getElementById('bD').addEventListener('click',()=>{if(sel)rm(sel);});
 document.getElementById('bC').addEventListener('click',()=>{cb();cc();});
@@ -215,16 +224,19 @@ document.getElementById('bQ').addEventListener('click',()=>{
   const b=document.getElementById('bQ');b.disabled=true;b.textContent='🌀 計算中…';
   setTimeout(()=>{try{const r=gc(seed,gap,shl,mt);if(!r.points||r.points.length<4)throw new Error('點太少，請加大殼厚');dc(r.points,r.info);}catch(x){alert('失敗：'+(x.message||x));}finally{b.disabled=false;b.textContent='🌀 繪製曲線';}},20);});
 
-window.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT')return;
-if(e.key==='Escape'){mode='sel';bA.classList.remove('a');ds();}
-else if(e.key==='Delete'||e.key==='Backspace'){if(sel)rm(sel);}
-else if(e.key==='g'||e.key==='G')tc.setMode('translate');
-else if(e.key==='r'||e.key==='R')tc.setMode('rotate');
-else if(e.key==='s'||e.key==='S')tc.setMode('scale');});
+window.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
+  if(e.key==='Escape'){mode='sel';ds();updateModeUI();}
+  else if(e.key==='Delete'||e.key==='Backspace'){if(sel)rm(sel);}
+  else if(e.key==='g'||e.key==='G')tc.setMode('translate');
+  else if(e.key==='r'||e.key==='R')tc.setMode('rotate');
+  else if(e.key==='s'||e.key==='S')tc.setMode('scale');
+});
 
 function an(){requestAnimationFrame(an);oc.update();rn.render(sc,cm);}an();
 window.addEventListener('resize',()=>{cm.aspect=innerWidth/innerHeight;cm.updateProjectionMatrix();rn.setSize(innerWidth,innerHeight);});
 
+updateModeUI();
 ar(42);
 </script>
 </body>
