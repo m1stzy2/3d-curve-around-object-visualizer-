@@ -15,7 +15,7 @@
     display: flex; flex-direction: column; gap: 6px;
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-    user-select: none;
+    user-select: none; min-width: 260px;
   }
   .row { display: flex; gap: 6px; align-items: center; }
   button {
@@ -33,6 +33,8 @@
     border: 1px solid #3a3e52; border-radius: 4px;
     padding: 4px 6px; font-size: 13px;
   }
+  input[type=range] { flex: 1; accent-color: #ffb060; }
+  label { font-size: 12px; color: #aab; white-space: nowrap; }
   #status { font-size: 12px; color: #9aa; }
   #hint {
     position: fixed; bottom: 12px; left: 12px; z-index: 10;
@@ -63,6 +65,16 @@
   <div class="row">
     <button id="btnCurve">🌀 绘制随机曲线</button>
     <input id="seed" type="number" value="42" title="随机种子">
+  </div>
+  <div class="row">
+    <label>离表面</label>
+    <input id="gap" type="range" min="0.2" max="2.0" step="0.1" value="0.5" title="曲线离方块表面的最小距离">
+    <span id="gapVal" style="font-size:12px;color:#9aa;width:24px">0.5</span>
+  </div>
+  <div class="row">
+    <label>壳&nbsp;厚&nbsp;</label>
+    <input id="shell" type="range" min="0.4" max="3.0" step="0.1" value="1.2" title="曲线的可活动外壳厚度">
+    <span id="shellVal" style="font-size:12px;color:#9aa;width:24px">1.2</span>
   </div>
   <div id="status">方块: 0 | 曲线: 无</div>
 </div>
@@ -111,7 +123,6 @@ orbit.mouseButtons = {
   RIGHT: THREE.MOUSE.PAN,
 };
 
-// 灯光
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const key = new THREE.DirectionalLight(0xffffff, 1.4);
 key.position.set(6, 12, 6);
@@ -120,9 +131,7 @@ const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
 fill.position.set(-6, 6, -6);
 scene.add(fill);
 
-// 地面
 const grid = new THREE.GridHelper(60, 60, 0x333348, 0x1a1a28);
-grid.position.y = 0;
 scene.add(grid);
 
 const groundPlane = new THREE.Mesh(
@@ -135,11 +144,10 @@ scene.add(groundPlane);
 // ============================================================
 // 状态
 // ============================================================
-const boxes = [];          // { mesh, radius }
+const boxes = [];
 let selected = null;
-let mode = 'select';       // 'select' | 'add'
-let curveLine = null;
-let startMesh = null;
+let mode = 'select';
+let curveGroup = null;
 
 // ============================================================
 // TransformControls
@@ -148,10 +156,7 @@ const tc = new TransformControls(camera, renderer.domElement);
 tc.setMode('translate');
 tc.setSpace('world');
 tc.setSize(0.9);
-
-tc.addEventListener('dragging-changed', e => {
-  orbit.enabled = !e.value;
-});
+tc.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
 
 const tcHelper = (typeof tc.getHelper === 'function') ? tc.getHelper() : tc;
 scene.add(tcHelper);
@@ -160,7 +165,8 @@ scene.add(tcHelper);
 // 方块
 // ============================================================
 function makeBox(pos, size = 1, hue = null) {
-  const h = hue === null ? Math.random() : hue;
+  // 【修复】用 == null 同时捕获 null 和 undefined；?? 更简洁
+  const h = hue ?? Math.random();
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color().setHSL(h, 0.55, 0.55),
     transparent: true,
@@ -203,9 +209,7 @@ function selectEntry(entry) {
 }
 
 function deselect() {
-  if (selected) {
-    selected.mesh.material.emissive = new THREE.Color(0x000000);
-  }
+  if (selected) selected.mesh.material.emissive = new THREE.Color(0x000000);
   selected = null;
   tc.detach();
   updateStatus();
@@ -240,7 +244,7 @@ function randTangent(normal, rng) {
 }
 
 // ============================================================
-// 距离查询（用每个方块的包围球近似）
+// 距离查询
 // ============================================================
 function distToObjects(p) {
   if (boxes.length === 0) return Infinity;
@@ -253,9 +257,9 @@ function distToObjects(p) {
 }
 
 // ============================================================
-// 曲线生成（切向保持 + 径向外推 + 已访问点排斥 + 随机停止）
+// 曲线生成
 // ============================================================
-function generateCurve(seed) {
+function generateCurve(seed, gap, shellThick) {
   const rng = mulberry32(seed);
 
   const center = new THREE.Vector3();
@@ -267,11 +271,12 @@ function generateCurve(seed) {
     maxR = Math.max(maxR, center.distanceTo(b.mesh.position) + b.radius);
   }
 
-  const dMin = maxR + 1.6;           // 安全距离
-  const dMax = maxR + 5.0;           // 外边界
-  const step = Math.max(0.28, maxR * 0.06);
-  const eps = step * 2.0;            // 最小不自交间距
-  const radiusOn = Math.max(0.4, maxR * 0.15);
+  // 【修复】大幅缩小半径：贴近表面
+  const dMin = maxR + gap;
+  const dMax = maxR + gap + shellThick;
+  const step = Math.max(0.15, maxR * 0.05);
+  const eps  = step * 2.0;
+  const radiusOn = Math.max(0.25, maxR * 0.1);
 
   // 起点
   let p = null;
@@ -280,12 +285,12 @@ function generateCurve(seed) {
     const target = center.clone().addScaledVector(u, (dMin + dMax) * 0.5);
     if (distToObjects(target) > radiusOn) { p = target; break; }
   }
-  if (!p) throw new Error('无法找到合法起点，请增大安全距离');
+  if (!p) throw new Error('无法找到合法起点，请增大"离表面"距离');
 
   const visited = [p.clone()];
   let dir = randTangent(p.clone().sub(center).normalize(), rng);
 
-  const N = 280 + Math.floor(rng() * 220);   // 随机停止步数
+  const N = 280 + Math.floor(rng() * 220);
   const skip = Math.ceil(eps / step) + 1;
 
   for (let i = 0; i < N; i++) {
@@ -300,7 +305,6 @@ function generateCurve(seed) {
     if (tang.lengthSq() < 1e-8) tang = randTangent(radial, rng);
     else tang.normalize();
 
-    // 已访问点排斥（局部窗口，够用即可）
     const repel = new THREE.Vector3();
     const repelR = 3 * step + eps;
     const lo = Math.max(0, visited.length - skip - 40);
@@ -308,9 +312,7 @@ function generateCurve(seed) {
     for (let j = lo; j < hi; j++) {
       const dq = p.clone().sub(visited[j]);
       const dd = dq.length();
-      if (dd > 1e-6 && dd < repelR) {
-        repel.addScaledVector(dq, 1 / (dd * dd * dd));
-      }
+      if (dd > 1e-6 && dd < repelR) repel.addScaledVector(dq, 1 / (dd * dd * dd));
     }
     if (repel.lengthSq() > 1e-8) repel.normalize();
 
@@ -335,7 +337,6 @@ function generateCurve(seed) {
         continue;
       }
 
-      // 自交检测
       let dmin = Infinity;
       const lim = visited.length - skip;
       for (let j = 0; j < lim; j++) {
@@ -357,40 +358,46 @@ function generateCurve(seed) {
 }
 
 // ============================================================
-// 曲线绘制 / 清除
+// 曲线绘制
 // ============================================================
 function clearCurve() {
-  if (curveLine) {
-    scene.remove(curveLine);
-    curveLine.geometry.dispose();
-    curveLine.material.dispose();
-    curveLine = null;
-  }
-  if (startMesh) {
-    scene.remove(startMesh);
-    startMesh.geometry.dispose();
-    startMesh.material.dispose();
-    startMesh = null;
+  if (curveGroup) {
+    scene.remove(curveGroup);
+    curveGroup.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) o.material.dispose();
+    });
+    curveGroup = null;
   }
   updateStatus();
 }
 
 function drawCurve(pts) {
   clearCurve();
+  curveGroup = new THREE.Group();
 
   const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineBasicMaterial({
-    color: 0xffb060, transparent: true, opacity: 0.95,
-  });
-  curveLine = new THREE.Line(geo, mat);
-  scene.add(curveLine);
 
-  const sgeo = new THREE.SphereGeometry(0.18, 16, 16);
+  // 【增强】主线
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+    color: 0xffc860, transparent: true, opacity: 1,
+  }));
+  curveGroup.add(line);
+
+  // 【增强】顶点小点
+  const points = new THREE.Points(geo.clone(), new THREE.PointsMaterial({
+    color: 0xffe0a0, size: 0.07, sizeAttenuation: true,
+  }));
+  curveGroup.add(points);
+
+  // 起点
+  const sgeo = new THREE.SphereGeometry(0.15, 16, 16);
   const smat = new THREE.MeshBasicMaterial({ color: 0xff3366 });
-  startMesh = new THREE.Mesh(sgeo, smat);
+  const startMesh = new THREE.Mesh(sgeo, smat);
   startMesh.position.copy(pts[0]);
-  scene.add(startMesh);
+  curveGroup.add(startMesh);
 
+  scene.add(curveGroup);
   updateStatus();
 }
 
@@ -398,7 +405,11 @@ function drawCurve(pts) {
 // 状态栏
 // ============================================================
 function updateStatus() {
-  const n = curveLine ? curveLine.geometry.attributes.position.count : 0;
+  let n = 0;
+  if (curveGroup) {
+    const line = curveGroup.children.find(c => c.type === 'Line');
+    n = line ? line.geometry.attributes.position.count : 0;
+  }
   document.getElementById('status').textContent =
     `方块: ${boxes.length} | 曲线: ${n ? n + ' 点' : '无'}` +
     (selected ? ' | 已选中' : '');
@@ -434,7 +445,7 @@ function pickGround(e) {
 }
 
 // ============================================================
-// 输入
+// 输入处理
 // ============================================================
 let downX = 0, downY = 0, downOnTC = false;
 
@@ -442,13 +453,14 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   downX = e.clientX; downY = e.clientY;
   setMouse(e);
-  downOnTC = raycaster.intersectObject(tcHelper, true).length > 0;
+  // 【修复】只有已选中方块时才检查 tc，避免误判
+  downOnTC = !!selected && raycaster.intersectObject(tcHelper, true).length > 0;
 });
 
 renderer.domElement.addEventListener('pointerup', e => {
   if (e.button !== 0) return;
   const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
-  if (downOnTC || moved > 6) return;
+  if (moved > 5) return;          // 【修复】降低拖动阈值，更宽容
 
   if (mode === 'add') {
     const hit = pickGround(e);
@@ -458,6 +470,8 @@ renderer.domElement.addEventListener('pointerup', e => {
     }
     return;
   }
+
+  if (downOnTC) return;           // 变换控件被点击，不算选择
 
   const entry = pickBox(e);
   if (entry) selectEntry(entry);
@@ -507,12 +521,23 @@ document.getElementById('btnClear').addEventListener('click', () => {
   deselect();
 });
 
+// 参数控件
+const gapEl = document.getElementById('gap');
+const gapVal = document.getElementById('gapVal');
+const shellEl = document.getElementById('shell');
+const shellVal = document.getElementById('shellVal');
+
+gapEl.addEventListener('input', () => gapVal.textContent = (+gapEl.value).toFixed(1));
+shellEl.addEventListener('input', () => shellVal.textContent = (+shellEl.value).toFixed(1));
+
 document.getElementById('btnCurve').addEventListener('click', () => {
   if (boxes.length === 0) {
     alert('请先添加至少一个方块');
     return;
   }
   const seed = (parseInt(document.getElementById('seed').value, 10) || 42) >>> 0;
+  const gap = parseFloat(gapEl.value);
+  const shell = parseFloat(shellEl.value);
 
   const btn = document.getElementById('btnCurve');
   btn.disabled = true;
@@ -520,8 +545,11 @@ document.getElementById('btnCurve').addEventListener('click', () => {
 
   setTimeout(() => {
     try {
-      const pts = generateCurve(seed);
+      const pts = generateCurve(seed, gap, shell);
+      if (pts.length < 4) throw new Error('生成点太少（' + pts.length + '），请调小"壳厚"或"离表面"');
       drawCurve(pts);
+      console.log('[curve] seed=' + seed + ' gap=' + gap + ' shell=' + shell +
+                  ' points=' + pts.length);
     } catch (err) {
       console.error(err);
       alert('生成失败: ' + err.message);
@@ -534,24 +562,19 @@ document.getElementById('btnCurve').addEventListener('click', () => {
 
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
-
   if (e.key === 'Escape') {
     mode = 'select';
     btnAdd.classList.remove('active');
     deselect();
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
     if (selected) removeEntry(selected);
-  } else if (e.key === 'g' || e.key === 'G') {
-    tc.setMode('translate');
-  } else if (e.key === 'r' || e.key === 'R') {
-    tc.setMode('rotate');
-  } else if (e.key === 's' || e.key === 'S') {
-    tc.setMode('scale');
-  }
+  } else if (e.key === 'g' || e.key === 'G') tc.setMode('translate');
+  else if (e.key === 'r' || e.key === 'R') tc.setMode('rotate');
+  else if (e.key === 's' || e.key === 'S') tc.setMode('scale');
 });
 
 // ============================================================
-// 渲染
+// 渲染循环
 // ============================================================
 function animate() {
   requestAnimationFrame(animate);
@@ -570,14 +593,11 @@ window.addEventListener('resize', () => {
 // 初始演示
 // ============================================================
 (function initDemo() {
-  const s1 = 1.2;
-  makeBox(new THREE.Vector3(0, s1 / 2, 0), s1, 0.55);
-  const s2 = 0.9;
-  makeBox(new THREE.Vector3(2.2, s2 / 2, 1.5), s2, 0.65);
-  const s3 = 1.0;
-  makeBox(new THREE.Vector3(-1.8, s3 / 2, -1.2), s3, 0.45);
+  makeBox(new THREE.Vector3(0, 0.6, 0), 1.2, 0.55);
+  makeBox(new THREE.Vector3(2.2, 0.45, 1.5), 0.9, 0.65);
+  makeBox(new THREE.Vector3(-1.8, 0.5, -1.2), 1.0, 0.45);
 })();
 </script>
 
 </body>
-  </html>
+</html>
