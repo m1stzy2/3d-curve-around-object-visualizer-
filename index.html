@@ -72,7 +72,7 @@
   </div>
   <div class="row">
     <label>離表面</label>
-    <input id="gap" type="range" min="0.05" max="0.8" step="0.05" value="0.15">
+    <input id="gap" type="range" min="0.01" max="0.8" step="0.01” value="0.15">
     <span id="gapVal" class="val">0.15</span>
   </div>
   <div class="row">
@@ -222,9 +222,9 @@ function addRandomBoxes(seed) {
   const rng = mulberry32(seed);
   const n = 3 + Math.floor(rng() * 4);
   for (let i = 0; i < n; i++) {
-    const size = 0.6 + rng() * 1.2;
+    const size = 0.6 + rng() * 3.2;
     const angle = rng() * Math.PI * 2;
-    const radius = 1.5 + rng() * 3.5;
+    const radius = rng() * 15;
     makeBox(
       new THREE.Vector3(
         Math.cos(angle) * radius,
