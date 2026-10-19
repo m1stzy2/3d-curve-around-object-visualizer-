@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D 方块 + 随机曲线可视化</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a12; color: #eee; }
+  #ui {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    background: rgba(20, 22, 34, 0.88);
+    border-radius: 10px; padding: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    user-select: none;
+  }
+  .row { display: flex; gap: 6px; align-items: center; }
+  button {
+    background: #2a2e42; color: #eef;
+    border: 1px solid #3a3e52;
+    padding: 6px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 13px;
+    transition: background 0.15s;
+  }
+  button:hover { background: #3a3e52; }
+  button.active { background: #d65a5a; border-color: #d65a5a; color: #fff; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input[type=number] {
+    width: 64px; background: #1a1e30; color: #eef;
+    border: 1px solid #3a3e52; border-radius: 4px;
+    padding: 4px 6px; font-size: 13px;
+  }
+  #status { font-size: 12px; color: #9aa; }
+  #hint {
+    position: fixed; bottom: 12px; left: 12px; z-index: 10;
+    font-size: 12px; color: #667; line-height: 1.7;
+    pointer-events: none;
+    background: rgba(10, 10, 18, 0.6);
+    padding: 6px 10px; border-radius: 6px;
+  }
+  kbd {
+    display: inline-block;
+    padding: 1px 5px; border-radius: 3px;
+    background: #2a2e42; border: 1px solid #4a4e62;
+    font-family: monospace; font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="row">
+    <button id="btnAdd">➕ 添加方块</button>
+    <button id="btnRand">🎲 随机方块</button>
+  </div>
+  <div class="row">
+    <button id="btnDel">🗑 删除选中</button>
+    <button id="btnClear">🧹 清空</button>
+  </div>
+  <div class="row">
+    <button id="btnCurve">🌀 绘制随机曲线</button>
+    <input id="seed" type="number" value="42" title="随机种子">
+  </div>
+  <div id="status">方块: 0 | 曲线: 无</div>
+</div>
+
+<div id="hint">
+  <kbd>点击方块</kbd> 选中 · <kbd>拖拽箭头</kbd> 移动 · <kbd>添加模式</kbd> 下点击地面放置<br>
+  <kbd>Delete</kbd> 删除选中 · <kbd>Esc</kbd> 取消/退出添加 · <kbd>右键拖拽</kbd> 平移视角
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+
+// ============================================================
+// 场景
+// ============================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a12);
+scene.fog = new THREE.Fog(0x0a0a12, 35, 90);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(11, 9, 13);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.08;
+orbit.target.set(0, 2, 0);
+orbit.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.PAN,
+};
+
+// 灯光
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 1.4);
+key.position.set(6, 12, 6);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
+fill.position.set(-6, 6, -6);
+scene.add(fill);
+
+// 地面
+const grid = new THREE.GridHelper(60, 60, 0x333348, 0x1a1a28);
+grid.position.y = 0;
+scene.add(grid);
+
+const groundPlane = new THREE.Mesh(
+  new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
+);
+groundPlane.rotation.x = -Math.PI / 2;
+scene.add(groundPlane);
+
+// ============================================================
+// 状态
+// ============================================================
+const boxes = [];          // { mesh, radius }
+let selected = null;
+let mode = 'select';       // 'select' | 'add'
+let curveLine = null;
+let startMesh = null;
+
+// ============================================================
+// TransformControls
+// ============================================================
+const tc = new TransformControls(camera, renderer.domElement);
+tc.setMode('translate');
+tc.setSpace('world');
+tc.setSize(0.9);
+
+tc.addEventListener('dragging-changed', e => {
+  orbit.enabled = !e.value;
+});
+
+const tcHelper = (typeof tc.getHelper === 'function') ? tc.getHelper() : tc;
+scene.add(tcHelper);
+
+// ============================================================
+// 方块
+// ============================================================
+function makeBox(pos, size = 1, hue = null) {
+  const h = hue === null ? Math.random() : hue;
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(h, 0.55, 0.55),
+    transparent: true,
+    opacity: 0.88,
+    roughness: 0.4,
+    metalness: 0.15,
+    emissive: new THREE.Color(0x000000),
+  });
+  const geo = new THREE.BoxGeometry(size, size, size);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(pos);
+  mesh.userData.size = size;
+  scene.add(mesh);
+
+  const radius = Math.sqrt(3) * size / 2;
+  const entry = { mesh, radius };
+  boxes.push(entry);
+  updateStatus();
+  return entry;
+}
+
+function removeEntry(entry) {
+  scene.remove(entry.mesh);
+  entry.mesh.geometry.dispose();
+  entry.mesh.material.dispose();
+  const i = boxes.indexOf(entry);
+  if (i >= 0) boxes.splice(i, 1);
+  if (selected === entry) deselect();
+  updateStatus();
+}
+
+function selectEntry(entry) {
+  if (selected === entry) return;
+  deselect();
+  selected = entry;
+  entry.mesh.material.emissive = new THREE.Color(0x445566);
+  entry.mesh.material.emissiveIntensity = 1;
+  tc.attach(entry.mesh);
+  updateStatus();
+}
+
+function deselect() {
+  if (selected) {
+    selected.mesh.material.emissive = new THREE.Color(0x000000);
+  }
+  selected = null;
+  tc.detach();
+  updateStatus();
+}
+
+// ============================================================
+// 随机工具
+// ============================================================
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function randUnit(rng) {
+  const u = rng() * 2 - 1;
+  const th = rng() * Math.PI * 2;
+  const r = Math.sqrt(1 - u * u);
+  return new THREE.Vector3(r * Math.cos(th), u, r * Math.sin(th));
+}
+
+function randTangent(normal, rng) {
+  for (let i = 0; i < 10; i++) {
+    const a = randUnit(rng);
+    const t = a.clone().addScaledVector(normal, -a.dot(normal));
+    if (t.lengthSq() > 1e-6) return t.normalize();
+  }
+  return randUnit(rng);
+}
+
+// ============================================================
+// 距离查询（用每个方块的包围球近似）
+// ============================================================
+function distToObjects(p) {
+  if (boxes.length === 0) return Infinity;
+  let d = Infinity;
+  for (const b of boxes) {
+    const dist = p.distanceTo(b.mesh.position) - b.radius;
+    if (dist < d) d = dist;
+  }
+  return d;
+}
+
+// ============================================================
+// 曲线生成（切向保持 + 径向外推 + 已访问点排斥 + 随机停止）
+// ============================================================
+function generateCurve(seed) {
+  const rng = mulberry32(seed);
+
+  const center = new THREE.Vector3();
+  for (const b of boxes) center.add(b.mesh.position);
+  center.divideScalar(boxes.length);
+
+  let maxR = 0;
+  for (const b of boxes) {
+    maxR = Math.max(maxR, center.distanceTo(b.mesh.position) + b.radius);
+  }
+
+  const dMin = maxR + 1.6;           // 安全距离
+  const dMax = maxR + 5.0;           // 外边界
+  const step = Math.max(0.28, maxR * 0.06);
+  const eps = step * 2.0;            // 最小不自交间距
+  const radiusOn = Math.max(0.4, maxR * 0.15);
+
+  // 起点
+  let p = null;
+  for (let tries = 0; tries < 100; tries++) {
+    const u = randUnit(rng);
+    const target = center.clone().addScaledVector(u, (dMin + dMax) * 0.5);
+    if (distToObjects(target) > radiusOn) { p = target; break; }
+  }
+  if (!p) throw new Error('无法找到合法起点，请增大安全距离');
+
+  const visited = [p.clone()];
+  let dir = randTangent(p.clone().sub(center).normalize(), rng);
+
+  const N = 280 + Math.floor(rng() * 220);   // 随机停止步数
+  const skip = Math.ceil(eps / step) + 1;
+
+  for (let i = 0; i < N; i++) {
+    const radial = p.clone().sub(center).normalize();
+    const r = p.distanceTo(center);
+
+    const radialForce = new THREE.Vector3();
+    if (r < dMin) radialForce.copy(radial);
+    else if (r > dMax) radialForce.copy(radial).multiplyScalar(-1);
+
+    let tang = dir.clone().addScaledVector(radial, -dir.dot(radial));
+    if (tang.lengthSq() < 1e-8) tang = randTangent(radial, rng);
+    else tang.normalize();
+
+    // 已访问点排斥（局部窗口，够用即可）
+    const repel = new THREE.Vector3();
+    const repelR = 3 * step + eps;
+    const lo = Math.max(0, visited.length - skip - 40);
+    const hi = visited.length - skip;
+    for (let j = lo; j < hi; j++) {
+      const dq = p.clone().sub(visited[j]);
+      const dd = dq.length();
+      if (dd > 1e-6 && dd < repelR) {
+        repel.addScaledVector(dq, 1 / (dd * dd * dd));
+      }
+    }
+    if (repel.lengthSq() > 1e-8) repel.normalize();
+
+    const newDir = new THREE.Vector3()
+      .addScaledVector(tang, 1.0)
+      .addScaledVector(radialForce, 2.0)
+      .addScaledVector(repel, 2.5)
+      .addScaledVector(dir, 1.5)
+      .addScaledVector(randUnit(rng), 0.6);
+
+    if (newDir.lengthSq() < 1e-8) newDir.copy(randUnit(rng));
+    else newDir.normalize();
+
+    let ok = false;
+    let cand;
+    for (let t = 0; t < 30; t++) {
+      cand = p.clone().addScaledVector(newDir, step);
+
+      if (distToObjects(cand) < radiusOn) {
+        const out = cand.clone().sub(center).normalize();
+        newDir.addScaledVector(out, 1.5).normalize();
+        continue;
+      }
+
+      // 自交检测
+      let dmin = Infinity;
+      const lim = visited.length - skip;
+      for (let j = 0; j < lim; j++) {
+        const dd = cand.distanceTo(visited[j]);
+        if (dd < dmin) dmin = dd;
+      }
+      if (dmin >= eps) { ok = true; break; }
+
+      newDir.addScaledVector(randUnit(rng), 2.0).add(repel).normalize();
+    }
+
+    if (!ok) break;
+    p.copy(cand);
+    dir.copy(newDir);
+    visited.push(p.clone());
+  }
+
+  return visited;
+}
+
+// ============================================================
+// 曲线绘制 / 清除
+// ============================================================
+function clearCurve() {
+  if (curveLine) {
+    scene.remove(curveLine);
+    curveLine.geometry.dispose();
+    curveLine.material.dispose();
+    curveLine = null;
+  }
+  if (startMesh) {
+    scene.remove(startMesh);
+    startMesh.geometry.dispose();
+    startMesh.material.dispose();
+    startMesh = null;
+  }
+  updateStatus();
+}
+
+function drawCurve(pts) {
+  clearCurve();
+
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffb060, transparent: true, opacity: 0.95,
+  });
+  curveLine = new THREE.Line(geo, mat);
+  scene.add(curveLine);
+
+  const sgeo = new THREE.SphereGeometry(0.18, 16, 16);
+  const smat = new THREE.MeshBasicMaterial({ color: 0xff3366 });
+  startMesh = new THREE.Mesh(sgeo, smat);
+  startMesh.position.copy(pts[0]);
+  scene.add(startMesh);
+
+  updateStatus();
+}
+
+// ============================================================
+// 状态栏
+// ============================================================
+function updateStatus() {
+  const n = curveLine ? curveLine.geometry.attributes.position.count : 0;
+  document.getElementById('status').textContent =
+    `方块: ${boxes.length} | 曲线: ${n ? n + ' 点' : '无'}` +
+    (selected ? ' | 已选中' : '');
+}
+
+// ============================================================
+// 拾取
+// ============================================================
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+function setMouse(e) {
+  mouse.x = (e.clientX / innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+}
+
+function pickBox(e) {
+  setMouse(e);
+  const meshes = boxes.map(b => b.mesh);
+  const hits = raycaster.intersectObjects(meshes, false);
+  if (hits.length > 0) {
+    const mesh = hits[0].object;
+    return boxes.find(b => b.mesh === mesh) || null;
+  }
+  return null;
+}
+
+function pickGround(e) {
+  setMouse(e);
+  const hits = raycaster.intersectObject(groundPlane, false);
+  return hits.length > 0 ? hits[0].point : null;
+}
+
+// ============================================================
+// 输入
+// ============================================================
+let downX = 0, downY = 0, downOnTC = false;
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  downX = e.clientX; downY = e.clientY;
+  setMouse(e);
+  downOnTC = raycaster.intersectObject(tcHelper, true).length > 0;
+});
+
+renderer.domElement.addEventListener('pointerup', e => {
+  if (e.button !== 0) return;
+  const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+  if (downOnTC || moved > 6) return;
+
+  if (mode === 'add') {
+    const hit = pickGround(e);
+    if (hit) {
+      const s = 1.0;
+      makeBox(new THREE.Vector3(hit.x, s / 2, hit.z), s);
+    }
+    return;
+  }
+
+  const entry = pickBox(e);
+  if (entry) selectEntry(entry);
+  else deselect();
+});
+
+// ============================================================
+// UI 事件
+// ============================================================
+const btnAdd = document.getElementById('btnAdd');
+
+btnAdd.addEventListener('click', () => {
+  if (mode === 'add') {
+    mode = 'select';
+    btnAdd.classList.remove('active');
+  } else {
+    mode = 'add';
+    btnAdd.classList.add('active');
+    deselect();
+  }
+});
+
+document.getElementById('btnRand').addEventListener('click', () => {
+  const n = 3 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < n; i++) {
+    const size = 0.6 + Math.random() * 1.2;
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 2 + Math.random() * 4;
+    makeBox(
+      new THREE.Vector3(
+        Math.cos(angle) * radius,
+        size / 2 + Math.random() * 2.5,
+        Math.sin(angle) * radius
+      ),
+      size
+    );
+  }
+});
+
+document.getElementById('btnDel').addEventListener('click', () => {
+  if (selected) removeEntry(selected);
+});
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  while (boxes.length > 0) removeEntry(boxes[0]);
+  clearCurve();
+  deselect();
+});
+
+document.getElementById('btnCurve').addEventListener('click', () => {
+  if (boxes.length === 0) {
+    alert('请先添加至少一个方块');
+    return;
+  }
+  const seed = (parseInt(document.getElementById('seed').value, 10) || 42) >>> 0;
+
+  const btn = document.getElementById('btnCurve');
+  btn.disabled = true;
+  btn.textContent = '🌀 计算中…';
+
+  setTimeout(() => {
+    try {
+      const pts = generateCurve(seed);
+      drawCurve(pts);
+    } catch (err) {
+      console.error(err);
+      alert('生成失败: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🌀 绘制随机曲线';
+    }
+  }, 20);
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+
+  if (e.key === 'Escape') {
+    mode = 'select';
+    btnAdd.classList.remove('active');
+    deselect();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selected) removeEntry(selected);
+  } else if (e.key === 'g' || e.key === 'G') {
+    tc.setMode('translate');
+  } else if (e.key === 'r' || e.key === 'R') {
+    tc.setMode('rotate');
+  } else if (e.key === 's' || e.key === 'S') {
+    tc.setMode('scale');
+  }
+});
+
+// ============================================================
+// 渲染
+// ============================================================
+function animate() {
+  requestAnimationFrame(animate);
+  orbit.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ============================================================
+// 初始演示
+// ============================================================
+(function initDemo() {
+  const s1 = 1.2;
+  makeBox(new THREE.Vector3(0, s1 / 2, 0), s1, 0.55);
+  const s2 = 0.9;
+  makeBox(new THREE.Vector3(2.2, s2 / 2, 1.5), s2, 0.65);
+  const s3 = 1.0;
+  makeBox(new THREE.Vector3(-1.8, s3 / 2, -1.2), s3, 0.45);
+})();
+</script>
+
+</body>
+  </html>
