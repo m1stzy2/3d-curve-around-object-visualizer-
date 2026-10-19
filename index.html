@@ -15,7 +15,7 @@
     display: flex; flex-direction: column; gap: 8px;
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-    user-select: none; min-width: 290px;
+    user-select: none; min-width: 300px;
   }
   .row { display: flex; gap: 6px; align-items: center; }
   button {
@@ -39,7 +39,7 @@
   input[type=range] { flex: 1; accent-color: #ffb060; }
   label { font-size: 12px; color: #aab; white-space: nowrap; }
   .val { font-size: 12px; color: #9aa; width: 32px; text-align: right; }
-  #status { font-size: 12px; color: #9aa; padding-top: 4px; border-top: 1px solid #2a2e42; }
+  #status { font-size: 12px; color: #9aa; padding-top: 4px; border-top: 1px solid #2a2e42; line-height: 1.6; }
   #hint {
     position: fixed; bottom: 12px; left: 12px; z-index: 10;
     font-size: 12px; color: #667; line-height: 1.7;
@@ -72,13 +72,13 @@
   </div>
   <div class="row">
     <label>離表面</label>
-    <input id="gap" type="range" min="0.1" max="1.5" step="0.05" value="0.25">
-    <span id="gapVal" class="val">0.25</span>
+    <input id="gap" type="range" min="0.05" max="0.8" step="0.05" value="0.15">
+    <span id="gapVal" class="val">0.15</span>
   </div>
   <div class="row">
     <label>殼厚</label>
-    <input id="shell" type="range" min="0.3" max="2.5" step="0.1" value="1.0">
-    <span id="shellVal" class="val">1.0</span>
+    <input id="shell" type="range" min="0.2" max="1.5" step="0.1" value="0.7">
+    <span id="shellVal" class="val">0.7</span>
   </div>
   <div id="status">方塊: 0 | 曲線: 無</div>
 </div>
@@ -140,7 +140,7 @@ scene.add(grid);
 // ============================================================
 // 狀態
 // ============================================================
-const boxes = [];        // { mesh, radius }
+const boxes = [];        // { mesh, radius, size }
 let curveGroup = null;
 
 // ============================================================
@@ -158,8 +158,9 @@ function makeBox(pos, size = 1, hue = null) {
   const geo = new THREE.BoxGeometry(size, size, size);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(pos);
+  mesh.userData.size = size;
   scene.add(mesh);
-  boxes.push({ mesh, radius: Math.sqrt(3) * size / 2 });
+  boxes.push({ mesh, radius: Math.sqrt(3) * size / 2, size });
   updateStatus();
 }
 
@@ -202,16 +203,16 @@ function randTangent(normal, rng) {
 }
 
 // ============================================================
-// 距離查詢（方塊包圍球近似）
+// 距離查詢
 // ============================================================
-function distToObjects(p) {
-  if (boxes.length === 0) return Infinity;
-  let d = Infinity;
+function nearestBox(p) {
+  if (boxes.length === 0) return null;
+  let minD = Infinity, nb = null;
   for (const b of boxes) {
-    const dist = p.distanceTo(b.mesh.position) - b.radius;
-    if (dist < d) d = dist;
+    const dd = p.distanceTo(b.mesh.position) - b.radius;
+    if (dd < minD) { minD = dd; nb = b; }
   }
-  return d;
+  return { box: nb, dist: minD };
 }
 
 // ============================================================
@@ -220,7 +221,6 @@ function distToObjects(p) {
 function addRandomBoxes(seed) {
   const rng = mulberry32(seed);
   const n = 3 + Math.floor(rng() * 4);
-
   for (let i = 0; i < n; i++) {
     const size = 0.6 + rng() * 1.2;
     const angle = rng() * Math.PI * 2;
@@ -237,53 +237,85 @@ function addRandomBoxes(seed) {
 }
 
 // ============================================================
-// 曲線生成
+// 曲線生成（貼近方塊版）
 // ============================================================
 function generateCurve(seed, gap, shellThick) {
   const rng = mulberry32(seed);
 
+  // ---- 尺度參考：以最大方塊邊長為基準 ----
+  let maxBoxSize = 0;
+  for (const b of boxes) maxBoxSize = Math.max(maxBoxSize, b.size);
+  const halfSize = 0.5 * maxBoxSize;   // 0.5 倍最大邊長上限
+
+  // ---- 目標距離區間（自動裁剪，保證不超過 halfSize）----
+  const targetGap = Math.min(gap, halfSize * 0.25);
+  let effShell = shellThick;
+  if (targetGap + effShell > halfSize) {
+    effShell = Math.max(0.1, halfSize - targetGap);
+  }
+  const maxGap = targetGap + effShell;
+
+  // ---- 防穿模閾值與步長（更細）----
+  const radiusOn = Math.max(0.02, maxBoxSize * 0.03);
+  const step = Math.max(0.06, maxBoxSize * 0.04);
+  const eps = step * 1.8;
+
+  // ---- 中心（用於切向）----
   const center = new THREE.Vector3();
   for (const b of boxes) center.add(b.mesh.position);
   center.divideScalar(boxes.length);
 
-  let maxR = 0;
-  for (const b of boxes) {
-    maxR = Math.max(maxR, center.distanceTo(b.mesh.position) + b.radius);
-  }
-
-  const dMin = maxR + gap;
-  const dMax = maxR + gap + shellThick;
-  const step = Math.max(0.1, maxR * 0.035);
-  const eps  = step * 1.8;
-  const radiusOn = Math.max(0.08, maxR * 0.05);
-
-  // 起點
+  // ---- 起點：從某個方塊表面附近出發 ----
   let p = null;
-  for (let tries = 0; tries < 120; tries++) {
-    const u = randUnit(rng);
-    const target = center.clone().addScaledVector(u, (dMin + dMax) * 0.5);
-    if (distToObjects(target) > radiusOn) { p = target; break; }
+  for (let tries = 0; tries < 200; tries++) {
+    const b = boxes[Math.floor(rng() * boxes.length)];
+    const dir0 = randUnit(rng);
+    const dist = b.radius + targetGap + rng() * (maxGap - targetGap) * 0.5;
+    const cand = b.mesh.position.clone().addScaledVector(dir0, dist);
+    if (nearestBox(cand).dist >= targetGap * 0.8) {
+      p = cand;
+      break;
+    }
   }
-  if (!p) throw new Error('找不到合法起點，請加大「離表面」或「殼厚」');
+  if (!p) throw new Error('找不到合法起點，請加大「離表面」或按「清空」重試');
 
   const visited = [p.clone()];
   let dir = randTangent(p.clone().sub(center).normalize(), rng);
 
-  const N = 320 + Math.floor(rng() * 260);
+  const N = 350 + Math.floor(rng() * 280);
   const skip = Math.ceil(eps / step) + 1;
 
   for (let i = 0; i < N; i++) {
     const radial = p.clone().sub(center).normalize();
-    const r = p.distanceTo(center);
+
+    // ---- 核心：基於「到最近方塊表面的距離」決定徑向力 ----
+    const nb = nearestBox(p);
+    let outward = p.clone().sub(nb.box.mesh.position);
+    if (outward.lengthSq() < 1e-8) outward = randUnit(rng);
+    else outward.normalize();
 
     const radialForce = new THREE.Vector3();
-    if (r < dMin) radialForce.copy(radial);
-    else if (r > dMax) radialForce.copy(radial).multiplyScalar(-1);
+    if (nb.dist < targetGap) {
+      // 太近：強推出去
+      radialForce.copy(outward).multiplyScalar(3.0);
+    } else if (nb.dist > maxGap && nb.dist < maxGap * 2.5) {
+      // 適度太遠：拉回
+      radialForce.copy(outward).multiplyScalar(-2.5);
+    } else if (nb.dist >= maxGap && nb.dist < maxGap * 2.5) {
+      // （合併到上面）
+    } else if (nb.dist >= targetGap && nb.dist <= maxGap) {
+      // 中間區：弱吸附到目標表面
+      const t = (nb.dist - targetGap) / (maxGap - targetGap); // 0~1
+      radialForce.copy(outward).multiplyScalar(-0.4 + 0.8 * t);
+    }
+    // 如果 nb.dist > maxGap*2.5：不施力，讓切向力主導
 
+    // ---- 切向保持（繞中心）----
     let tang = dir.clone().addScaledVector(radial, -dir.dot(radial));
     if (tang.lengthSq() < 1e-8) tang = randTangent(radial, rng);
     else tang.normalize();
 
+    // ---- 已訪問點排斥 ----
     const repel = new THREE.Vector3();
     const repelR = 3 * step + eps;
     const lo = Math.max(0, visited.length - skip - 40);
@@ -295,27 +327,34 @@ function generateCurve(seed, gap, shellThick) {
     }
     if (repel.lengthSq() > 1e-8) repel.normalize();
 
+    // ---- 合成方向 ----
     const newDir = new THREE.Vector3()
-      .addScaledVector(tang, 1.0)
-      .addScaledVector(radialForce, 2.0)
-      .addScaledVector(repel, 2.5)
-      .addScaledVector(dir, 1.5)
-      .addScaledVector(randUnit(rng), 0.6);
+      .addScaledVector(tang, 1.6)
+      .addScaledVector(radialForce, 1.4)
+      .addScaledVector(repel, 2.2)
+      .addScaledVector(dir, 1.0)
+      .addScaledVector(randUnit(rng), 0.35);
 
     if (newDir.lengthSq() < 1e-8) newDir.copy(randUnit(rng));
     else newDir.normalize();
 
+    // ---- 嘗試合法下一步 ----
     let ok = false;
     let cand;
     for (let t = 0; t < 30; t++) {
       cand = p.clone().addScaledVector(newDir, step);
 
-      if (distToObjects(cand) < radiusOn) {
-        const out = cand.clone().sub(center).normalize();
-        newDir.addScaledVector(out, 1.5).normalize();
+      // 防穿模：用最近方塊
+      const nb2 = nearestBox(cand);
+      if (nb2.dist < radiusOn) {
+        const out2 = cand.clone().sub(nb2.box.mesh.position);
+        if (out2.lengthSq() < 1e-8) out2.copy(randUnit(rng));
+        else out2.normalize();
+        newDir.addScaledVector(out2, 2.0).normalize();
         continue;
       }
 
+      // 自穿檢測
       let dmin = Infinity;
       const lim = visited.length - skip;
       for (let j = 0; j < lim; j++) {
@@ -333,6 +372,8 @@ function generateCurve(seed, gap, shellThick) {
     visited.push(p.clone());
   }
 
+  // 保存參數用於狀態顯示
+  generateCurve._lastInfo = { maxBoxSize, targetGap, maxGap, effShell };
   return visited;
 }
 
@@ -363,11 +404,11 @@ function drawCurve(pts) {
   curveGroup.add(line);
 
   const points = new THREE.Points(geo.clone(), new THREE.PointsMaterial({
-    color: 0xffe0a0, size: 0.06, sizeAttenuation: true,
+    color: 0xffe0a0, size: 0.05, sizeAttenuation: true,
   }));
   curveGroup.add(points);
 
-  const sgeo = new THREE.SphereGeometry(0.14, 16, 16);
+  const sgeo = new THREE.SphereGeometry(0.12, 16, 16);
   const smat = new THREE.MeshBasicMaterial({ color: 0xff3366 });
   const startMesh = new THREE.Mesh(sgeo, smat);
   startMesh.position.copy(pts[0]);
@@ -386,8 +427,13 @@ function updateStatus() {
     const line = curveGroup.children.find(c => c.type === 'Line');
     n = line ? line.geometry.attributes.position.count : 0;
   }
+  const info = generateCurve._lastInfo;
+  let extra = '';
+  if (info && n > 0) {
+    extra = ` | 距表面 ${info.targetGap.toFixed(2)}–${info.maxGap.toFixed(2)}`;
+  }
   document.getElementById('status').textContent =
-    `方塊: ${boxes.length} | 曲線: ${n ? n + ' 點' : '無'}`;
+    `方塊: ${boxes.length} | 曲線: ${n ? n + ' 點' : '無'}${extra}`;
 }
 
 // ============================================================
@@ -402,19 +448,16 @@ const seedEl = document.getElementById('seed');
 gapEl.addEventListener('input', () => gapVal.textContent = (+gapEl.value).toFixed(2));
 shellEl.addEventListener('input', () => shellVal.textContent = (+shellEl.value).toFixed(1));
 
-// 🎲 追加隨機方塊（不清空）
 document.getElementById('btnRand').addEventListener('click', () => {
   const s = (parseInt(seedEl.value, 10) || 42) >>> 0;
   addRandomBoxes(s);
 });
 
-// 🧹 清空全部
 document.getElementById('btnClear').addEventListener('click', () => {
   clearBoxes();
   clearCurve();
 });
 
-// 🌀 繪製曲線
 document.getElementById('btnCurve').addEventListener('click', () => {
   if (boxes.length === 0) {
     alert('請先按「🎲 隨機方塊」生成方塊');
@@ -433,7 +476,11 @@ document.getElementById('btnCurve').addEventListener('click', () => {
       const pts = generateCurve(seed, gap, shell);
       if (pts.length < 4) throw new Error('生成點太少，請加大「殼厚」');
       drawCurve(pts);
-      console.log(`[curve] seed=${seed} gap=${gap} shell=${shell} points=${pts.length}`);
+      const info = generateCurve._lastInfo;
+      console.log(`[curve] seed=${seed} gap=${gap} shell=${shell} ` +
+                  `points=${pts.length} ` +
+                  `maxBoxSize=${info.maxBoxSize.toFixed(2)} ` +
+                  `range=[${info.targetGap.toFixed(2)}, ${info.maxGap.toFixed(2)}]`);
     } catch (err) {
       console.error(err);
       alert('生成失敗：' + err.message);
@@ -461,7 +508,7 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 初始場景：先放一批方塊
+// 初始場景
 // ============================================================
 addRandomBoxes(42);
 </script>
