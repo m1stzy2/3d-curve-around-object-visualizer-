@@ -1,33 +1,36 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>3D 方块 + 随机曲线可视化</title>
+<title>3D 方塊 + 隨機曲線</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; }
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a12; color: #eee; }
+  body { font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif; background: #0a0a12; color: #eee; }
   #ui {
     position: fixed; top: 12px; left: 12px; z-index: 10;
-    background: rgba(20, 22, 34, 0.88);
-    border-radius: 10px; padding: 10px;
-    display: flex; flex-direction: column; gap: 6px;
+    background: rgba(20, 22, 34, 0.9);
+    border-radius: 10px; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-    user-select: none; min-width: 260px;
+    user-select: none; min-width: 290px;
   }
   .row { display: flex; gap: 6px; align-items: center; }
   button {
     background: #2a2e42; color: #eef;
     border: 1px solid #3a3e52;
-    padding: 6px 10px; border-radius: 6px;
+    padding: 7px 12px; border-radius: 6px;
     cursor: pointer; font-size: 13px;
     transition: background 0.15s;
   }
   button:hover { background: #3a3e52; }
-  button.active { background: #d65a5a; border-color: #d65a5a; color: #fff; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #d65a5a; border-color: #d65a5a; }
+  button.primary:hover { background: #e26a6a; }
+  button.warn { background: #4a2a2e; border-color: #5a3a3e; }
+  button.warn:hover { background: #5a3a3e; }
   input[type=number] {
     width: 64px; background: #1a1e30; color: #eef;
     border: 1px solid #3a3e52; border-radius: 4px;
@@ -35,7 +38,8 @@
   }
   input[type=range] { flex: 1; accent-color: #ffb060; }
   label { font-size: 12px; color: #aab; white-space: nowrap; }
-  #status { font-size: 12px; color: #9aa; }
+  .val { font-size: 12px; color: #9aa; width: 32px; text-align: right; }
+  #status { font-size: 12px; color: #9aa; padding-top: 4px; border-top: 1px solid #2a2e42; }
   #hint {
     position: fixed; bottom: 12px; left: 12px; z-index: 10;
     font-size: 12px; color: #667; line-height: 1.7;
@@ -55,33 +59,33 @@
 
 <div id="ui">
   <div class="row">
-    <button id="btnAdd">➕ 添加方块</button>
-    <button id="btnRand">🎲 随机方块</button>
+    <button id="btnRand">🎲 隨機方塊</button>
+    <button id="btnClear" class="warn">🧹 清空</button>
   </div>
   <div class="row">
-    <button id="btnDel">🗑 删除选中</button>
-    <button id="btnClear">🧹 清空</button>
+    <button id="btnCurve" class="primary" style="flex:1">🌀 繪製隨機曲線</button>
   </div>
   <div class="row">
-    <button id="btnCurve">🌀 绘制随机曲线</button>
-    <input id="seed" type="number" value="42" title="随机种子">
+    <label>種子</label>
+    <input id="seed" type="number" value="42" title="隨機種子">
+    <span style="flex:1"></span>
   </div>
   <div class="row">
-    <label>离表面</label>
-    <input id="gap" type="range" min="0.2" max="2.0" step="0.1" value="0.5" title="曲线离方块表面的最小距离">
-    <span id="gapVal" style="font-size:12px;color:#9aa;width:24px">0.5</span>
+    <label>離表面</label>
+    <input id="gap" type="range" min="0.1" max="1.5" step="0.05" value="0.25">
+    <span id="gapVal" class="val">0.25</span>
   </div>
   <div class="row">
-    <label>壳&nbsp;厚&nbsp;</label>
-    <input id="shell" type="range" min="0.4" max="3.0" step="0.1" value="1.2" title="曲线的可活动外壳厚度">
-    <span id="shellVal" style="font-size:12px;color:#9aa;width:24px">1.2</span>
+    <label>殼厚</label>
+    <input id="shell" type="range" min="0.3" max="2.5" step="0.1" value="1.0">
+    <span id="shellVal" class="val">1.0</span>
   </div>
-  <div id="status">方块: 0 | 曲线: 无</div>
+  <div id="status">方塊: 0 | 曲線: 無</div>
 </div>
 
 <div id="hint">
-  <kbd>点击方块</kbd> 选中 · <kbd>拖拽箭头</kbd> 移动 · <kbd>添加模式</kbd> 下点击地面放置<br>
-  <kbd>Delete</kbd> 删除选中 · <kbd>Esc</kbd> 取消/退出添加 · <kbd>右键拖拽</kbd> 平移视角
+  <kbd>左鍵拖拽</kbd> 旋轉視角 · <kbd>右鍵拖拽</kbd> 平移 · <kbd>滾輪</kbd> 縮放<br>
+  <kbd>🎲</kbd> 追加隨機方塊 · <kbd>🧹</kbd> 清空所有 · <kbd>🌀</kbd> 圍繞全部方塊生成曲線
 </div>
 
 <script type="importmap">
@@ -96,17 +100,16 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
 // ============================================================
-// 场景
+// 場景
 // ============================================================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0a12);
-scene.fog = new THREE.Fog(0x0a0a12, 35, 90);
+scene.fog = new THREE.Fog(0x0a0a12, 30, 80);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 2000);
-camera.position.set(11, 9, 13);
+camera.position.set(10, 8, 12);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -116,7 +119,7 @@ document.body.appendChild(renderer.domElement);
 const orbit = new OrbitControls(camera, renderer.domElement);
 orbit.enableDamping = true;
 orbit.dampingFactor = 0.08;
-orbit.target.set(0, 2, 0);
+orbit.target.set(0, 1.5, 0);
 orbit.mouseButtons = {
   LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.DOLLY,
@@ -134,89 +137,44 @@ scene.add(fill);
 const grid = new THREE.GridHelper(60, 60, 0x333348, 0x1a1a28);
 scene.add(grid);
 
-const groundPlane = new THREE.Mesh(
-  new THREE.PlaneGeometry(60, 60),
-  new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
-);
-groundPlane.rotation.x = -Math.PI / 2;
-scene.add(groundPlane);
-
 // ============================================================
-// 状态
+// 狀態
 // ============================================================
-const boxes = [];
-let selected = null;
-let mode = 'select';
+const boxes = [];        // { mesh, radius }
 let curveGroup = null;
 
 // ============================================================
-// TransformControls
-// ============================================================
-const tc = new TransformControls(camera, renderer.domElement);
-tc.setMode('translate');
-tc.setSpace('world');
-tc.setSize(0.9);
-tc.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
-
-const tcHelper = (typeof tc.getHelper === 'function') ? tc.getHelper() : tc;
-scene.add(tcHelper);
-
-// ============================================================
-// 方块
+// 方塊
 // ============================================================
 function makeBox(pos, size = 1, hue = null) {
-  // 【修复】用 == null 同时捕获 null 和 undefined；?? 更简洁
   const h = hue ?? Math.random();
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color().setHSL(h, 0.55, 0.55),
     transparent: true,
-    opacity: 0.88,
+    opacity: 0.9,
     roughness: 0.4,
     metalness: 0.15,
-    emissive: new THREE.Color(0x000000),
   });
   const geo = new THREE.BoxGeometry(size, size, size);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(pos);
-  mesh.userData.size = size;
   scene.add(mesh);
-
-  const radius = Math.sqrt(3) * size / 2;
-  const entry = { mesh, radius };
-  boxes.push(entry);
-  updateStatus();
-  return entry;
-}
-
-function removeEntry(entry) {
-  scene.remove(entry.mesh);
-  entry.mesh.geometry.dispose();
-  entry.mesh.material.dispose();
-  const i = boxes.indexOf(entry);
-  if (i >= 0) boxes.splice(i, 1);
-  if (selected === entry) deselect();
+  boxes.push({ mesh, radius: Math.sqrt(3) * size / 2 });
   updateStatus();
 }
 
-function selectEntry(entry) {
-  if (selected === entry) return;
-  deselect();
-  selected = entry;
-  entry.mesh.material.emissive = new THREE.Color(0x445566);
-  entry.mesh.material.emissiveIntensity = 1;
-  tc.attach(entry.mesh);
-  updateStatus();
-}
-
-function deselect() {
-  if (selected) selected.mesh.material.emissive = new THREE.Color(0x000000);
-  selected = null;
-  tc.detach();
+function clearBoxes() {
+  for (const b of boxes) {
+    scene.remove(b.mesh);
+    b.mesh.geometry.dispose();
+    b.mesh.material.dispose();
+  }
+  boxes.length = 0;
   updateStatus();
 }
 
 // ============================================================
-// 随机工具
+// 隨機工具
 // ============================================================
 function mulberry32(a) {
   return function() {
@@ -244,7 +202,7 @@ function randTangent(normal, rng) {
 }
 
 // ============================================================
-// 距离查询
+// 距離查詢（方塊包圍球近似）
 // ============================================================
 function distToObjects(p) {
   if (boxes.length === 0) return Infinity;
@@ -257,7 +215,29 @@ function distToObjects(p) {
 }
 
 // ============================================================
-// 曲线生成
+// 追加隨機方塊
+// ============================================================
+function addRandomBoxes(seed) {
+  const rng = mulberry32(seed);
+  const n = 3 + Math.floor(rng() * 4);
+
+  for (let i = 0; i < n; i++) {
+    const size = 0.6 + rng() * 1.2;
+    const angle = rng() * Math.PI * 2;
+    const radius = 1.5 + rng() * 3.5;
+    makeBox(
+      new THREE.Vector3(
+        Math.cos(angle) * radius,
+        size / 2 + rng() * 2.0,
+        Math.sin(angle) * radius
+      ),
+      size
+    );
+  }
+}
+
+// ============================================================
+// 曲線生成
 // ============================================================
 function generateCurve(seed, gap, shellThick) {
   const rng = mulberry32(seed);
@@ -271,26 +251,25 @@ function generateCurve(seed, gap, shellThick) {
     maxR = Math.max(maxR, center.distanceTo(b.mesh.position) + b.radius);
   }
 
-  // 【修复】大幅缩小半径：贴近表面
   const dMin = maxR + gap;
   const dMax = maxR + gap + shellThick;
-  const step = Math.max(0.15, maxR * 0.05);
-  const eps  = step * 2.0;
-  const radiusOn = Math.max(0.25, maxR * 0.1);
+  const step = Math.max(0.1, maxR * 0.035);
+  const eps  = step * 1.8;
+  const radiusOn = Math.max(0.08, maxR * 0.05);
 
-  // 起点
+  // 起點
   let p = null;
-  for (let tries = 0; tries < 100; tries++) {
+  for (let tries = 0; tries < 120; tries++) {
     const u = randUnit(rng);
     const target = center.clone().addScaledVector(u, (dMin + dMax) * 0.5);
     if (distToObjects(target) > radiusOn) { p = target; break; }
   }
-  if (!p) throw new Error('无法找到合法起点，请增大"离表面"距离');
+  if (!p) throw new Error('找不到合法起點，請加大「離表面」或「殼厚」');
 
   const visited = [p.clone()];
   let dir = randTangent(p.clone().sub(center).normalize(), rng);
 
-  const N = 280 + Math.floor(rng() * 220);
+  const N = 320 + Math.floor(rng() * 260);
   const skip = Math.ceil(eps / step) + 1;
 
   for (let i = 0; i < N; i++) {
@@ -358,7 +337,7 @@ function generateCurve(seed, gap, shellThick) {
 }
 
 // ============================================================
-// 曲线绘制
+// 繪製 / 清除曲線
 // ============================================================
 function clearCurve() {
   if (curveGroup) {
@@ -378,20 +357,17 @@ function drawCurve(pts) {
 
   const geo = new THREE.BufferGeometry().setFromPoints(pts);
 
-  // 【增强】主线
   const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
     color: 0xffc860, transparent: true, opacity: 1,
   }));
   curveGroup.add(line);
 
-  // 【增强】顶点小点
   const points = new THREE.Points(geo.clone(), new THREE.PointsMaterial({
-    color: 0xffe0a0, size: 0.07, sizeAttenuation: true,
+    color: 0xffe0a0, size: 0.06, sizeAttenuation: true,
   }));
   curveGroup.add(points);
 
-  // 起点
-  const sgeo = new THREE.SphereGeometry(0.15, 16, 16);
+  const sgeo = new THREE.SphereGeometry(0.14, 16, 16);
   const smat = new THREE.MeshBasicMaterial({ color: 0xff3366 });
   const startMesh = new THREE.Mesh(sgeo, smat);
   startMesh.position.copy(pts[0]);
@@ -402,7 +378,7 @@ function drawCurve(pts) {
 }
 
 // ============================================================
-// 状态栏
+// 狀態列
 // ============================================================
 function updateStatus() {
   let n = 0;
@@ -411,170 +387,65 @@ function updateStatus() {
     n = line ? line.geometry.attributes.position.count : 0;
   }
   document.getElementById('status').textContent =
-    `方块: ${boxes.length} | 曲线: ${n ? n + ' 点' : '无'}` +
-    (selected ? ' | 已选中' : '');
+    `方塊: ${boxes.length} | 曲線: ${n ? n + ' 點' : '無'}`;
 }
 
 // ============================================================
-// 拾取
+// UI
 // ============================================================
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-function setMouse(e) {
-  mouse.x = (e.clientX / innerWidth) * 2 - 1;
-  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-}
-
-function pickBox(e) {
-  setMouse(e);
-  const meshes = boxes.map(b => b.mesh);
-  const hits = raycaster.intersectObjects(meshes, false);
-  if (hits.length > 0) {
-    const mesh = hits[0].object;
-    return boxes.find(b => b.mesh === mesh) || null;
-  }
-  return null;
-}
-
-function pickGround(e) {
-  setMouse(e);
-  const hits = raycaster.intersectObject(groundPlane, false);
-  return hits.length > 0 ? hits[0].point : null;
-}
-
-// ============================================================
-// 输入处理
-// ============================================================
-let downX = 0, downY = 0, downOnTC = false;
-
-renderer.domElement.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
-  downX = e.clientX; downY = e.clientY;
-  setMouse(e);
-  // 【修复】只有已选中方块时才检查 tc，避免误判
-  downOnTC = !!selected && raycaster.intersectObject(tcHelper, true).length > 0;
-});
-
-renderer.domElement.addEventListener('pointerup', e => {
-  if (e.button !== 0) return;
-  const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
-  if (moved > 5) return;          // 【修复】降低拖动阈值，更宽容
-
-  if (mode === 'add') {
-    const hit = pickGround(e);
-    if (hit) {
-      const s = 1.0;
-      makeBox(new THREE.Vector3(hit.x, s / 2, hit.z), s);
-    }
-    return;
-  }
-
-  if (downOnTC) return;           // 变换控件被点击，不算选择
-
-  const entry = pickBox(e);
-  if (entry) selectEntry(entry);
-  else deselect();
-});
-
-// ============================================================
-// UI 事件
-// ============================================================
-const btnAdd = document.getElementById('btnAdd');
-
-btnAdd.addEventListener('click', () => {
-  if (mode === 'add') {
-    mode = 'select';
-    btnAdd.classList.remove('active');
-  } else {
-    mode = 'add';
-    btnAdd.classList.add('active');
-    deselect();
-  }
-});
-
-document.getElementById('btnRand').addEventListener('click', () => {
-  const n = 3 + Math.floor(Math.random() * 4);
-  for (let i = 0; i < n; i++) {
-    const size = 0.6 + Math.random() * 1.2;
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 2 + Math.random() * 4;
-    makeBox(
-      new THREE.Vector3(
-        Math.cos(angle) * radius,
-        size / 2 + Math.random() * 2.5,
-        Math.sin(angle) * radius
-      ),
-      size
-    );
-  }
-});
-
-document.getElementById('btnDel').addEventListener('click', () => {
-  if (selected) removeEntry(selected);
-});
-
-document.getElementById('btnClear').addEventListener('click', () => {
-  while (boxes.length > 0) removeEntry(boxes[0]);
-  clearCurve();
-  deselect();
-});
-
-// 参数控件
 const gapEl = document.getElementById('gap');
 const gapVal = document.getElementById('gapVal');
 const shellEl = document.getElementById('shell');
 const shellVal = document.getElementById('shellVal');
+const seedEl = document.getElementById('seed');
 
-gapEl.addEventListener('input', () => gapVal.textContent = (+gapEl.value).toFixed(1));
+gapEl.addEventListener('input', () => gapVal.textContent = (+gapEl.value).toFixed(2));
 shellEl.addEventListener('input', () => shellVal.textContent = (+shellEl.value).toFixed(1));
 
+// 🎲 追加隨機方塊（不清空）
+document.getElementById('btnRand').addEventListener('click', () => {
+  const s = (parseInt(seedEl.value, 10) || 42) >>> 0;
+  addRandomBoxes(s);
+});
+
+// 🧹 清空全部
+document.getElementById('btnClear').addEventListener('click', () => {
+  clearBoxes();
+  clearCurve();
+});
+
+// 🌀 繪製曲線
 document.getElementById('btnCurve').addEventListener('click', () => {
   if (boxes.length === 0) {
-    alert('请先添加至少一个方块');
+    alert('請先按「🎲 隨機方塊」生成方塊');
     return;
   }
-  const seed = (parseInt(document.getElementById('seed').value, 10) || 42) >>> 0;
+  const seed = (parseInt(seedEl.value, 10) || 42) >>> 0;
   const gap = parseFloat(gapEl.value);
   const shell = parseFloat(shellEl.value);
 
   const btn = document.getElementById('btnCurve');
   btn.disabled = true;
-  btn.textContent = '🌀 计算中…';
+  btn.textContent = '🌀 計算中…';
 
   setTimeout(() => {
     try {
       const pts = generateCurve(seed, gap, shell);
-      if (pts.length < 4) throw new Error('生成点太少（' + pts.length + '），请调小"壳厚"或"离表面"');
+      if (pts.length < 4) throw new Error('生成點太少，請加大「殼厚」');
       drawCurve(pts);
-      console.log('[curve] seed=' + seed + ' gap=' + gap + ' shell=' + shell +
-                  ' points=' + pts.length);
+      console.log(`[curve] seed=${seed} gap=${gap} shell=${shell} points=${pts.length}`);
     } catch (err) {
       console.error(err);
-      alert('生成失败: ' + err.message);
+      alert('生成失敗：' + err.message);
     } finally {
       btn.disabled = false;
-      btn.textContent = '🌀 绘制随机曲线';
+      btn.textContent = '🌀 繪製隨機曲線';
     }
   }, 20);
 });
 
-window.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
-  if (e.key === 'Escape') {
-    mode = 'select';
-    btnAdd.classList.remove('active');
-    deselect();
-  } else if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (selected) removeEntry(selected);
-  } else if (e.key === 'g' || e.key === 'G') tc.setMode('translate');
-  else if (e.key === 'r' || e.key === 'R') tc.setMode('rotate');
-  else if (e.key === 's' || e.key === 'S') tc.setMode('scale');
-});
-
 // ============================================================
-// 渲染循环
+// 渲染
 // ============================================================
 function animate() {
   requestAnimationFrame(animate);
@@ -590,13 +461,9 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 初始演示
+// 初始場景：先放一批方塊
 // ============================================================
-(function initDemo() {
-  makeBox(new THREE.Vector3(0, 0.6, 0), 1.2, 0.55);
-  makeBox(new THREE.Vector3(2.2, 0.45, 1.5), 0.9, 0.65);
-  makeBox(new THREE.Vector3(-1.8, 0.5, -1.2), 1.0, 0.45);
-})();
+addRandomBoxes(42);
 </script>
 
 </body>
